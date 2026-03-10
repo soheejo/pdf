@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF 이미지 변환기</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- JSZip -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- localForage (대용량 브라우저 저장을 위한 IndexedDB 래퍼) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+
+    <style>
+      /* 스크롤바 숨기기 (기능은 유지) */
+      ::-webkit-scrollbar {
+        display: none;
+      }
+      * {
+        -ms-overflow-style: none; /* IE and Edge */
+        scrollbar-width: none; /* Firefox */
+      }
+
+      /* 캔버스 래퍼 기본 스타일 */
+      .pdf-canvas-wrapper {
+        box-shadow:
+          0 10px 25px -5px rgba(0, 0, 0, 0.1),
+          0 8px 10px -6px rgba(0, 0, 0, 0.1);
+        background-color: white;
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+      .pdf-canvas-wrapper:hover {
+        box-shadow:
+          0 20px 25px -5px rgba(0, 0, 0, 0.1),
+          0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      }
+
+      canvas {
+        max-width: 100%;
+        height: auto;
+        display: block;
+      }
+    </style>
+  </head>
+  <body
+    class="bg-gray-100 flex flex-col font-sans h-screen overflow-hidden text-gray-800"
+  >
+    <!-- Header / Toolbar (3-column flex layout for exact centering) -->
+    <header
+      class="bg-white border-b border-gray-200 px-4 h-[4.5rem] flex items-center justify-between z-40 shadow-sm shrink-0 w-full relative"
+    >
+      <!-- 1. 좌측 영역 (타이틀) -->
+      <div
+        class="flex-1 flex justify-start items-center gap-2 sm:gap-4 min-w-max hidden lg:flex"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="text-red-500 shrink-0"
+        >
+          <path
+            d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+          />
+          <polyline points="14 2 14 8 20 8" />
+          <path d="M9 15h6" />
+          <path d="M9 11h6" />
+        </svg>
+        <h1
+          class="text-lg sm:text-xl font-bold text-gray-800 tracking-tight flex items-center gap-2 whitespace-nowrap"
+        >
+          PDF 이미지 변환기
+          <span
+            class="px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] sm:text-xs font-black tracking-widest shadow-sm border border-red-100"
+            >v1.5</span
+          >
+        </h1>
+      </div>
+
+      <!-- 2. 중앙 영역 (기능 액션 버튼들 가운데 정렬) -->
+      <div
+        class="flex-auto flex items-center justify-center gap-1 sm:gap-1.5 w-full lg:w-auto overflow-x-auto no-scrollbar"
+      >
+        <!-- PDF 업로드 라벨 버튼 -->
+        <label
+          for="pdf-upload"
+          class="cursor-pointer flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors shadow-sm text-xs sm:text-sm font-medium whitespace-nowrap"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="shrink-0"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" x2="12" y1="3" y2="15" />
+          </svg>
+          불러오기
+        </label>
+        <input
+          type="file"
+          id="pdf-upload"
+          accept=".pdf"
+          class="hidden"
+          multiple
+          onchange="handleFileUpload(event)"
+        />
+
+        <div class="h-6 w-px bg-gray-300 mx-0.5 sm:mx-1"></div>
+
+        <!-- 전체 복사 버튼 -->
+        <button
+          onclick="copyAllToClipboard()"
+          id="btn-copy-all"
+          class="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm text-xs sm:text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+          title="모든 페이지를 하나의 이미지로 이어붙여 복사"
+          disabled
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="shrink-0"
+          >
+            <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+            <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+          </svg>
+          <span class="hidden sm:inline">전체 복사</span>
+        </button>
+
+        <button
+          onclick="exportAllToZip()"
+          id="btn-export-zip"
+          class="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm text-xs sm:text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ml-1 sm:ml-2"
+          title="모든 페이지 ZIP으로 저장"
+          disabled
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="shrink-0"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" x2="12" y1="15" y2="3" />
+          </svg>
+          <span class="hidden lg:inline">전체 ZIP 저장</span>
+          <span class="inline lg:hidden">ZIP 저장</span>
+        </button>
+
+        <div class="h-6 w-px bg-gray-300 mx-0.5 sm:mx-1"></div>
+
+        <!-- 초기화 버튼 (맨 우측으로 이동) -->
+        <button
+          onclick="clearAll()"
+          id="btn-clear"
+          class="p-1.5 sm:p-2 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          title="초기화"
+          disabled
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            sm:width="18"
+            sm:height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M3 6h18" />
+            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- 3. 우측 영역 (중앙 정렬 밸런스를 맞추기 위한 여백 빈공간) -->
+      <div class="flex-1 hidden lg:block min-w-max"></div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main
+      class="flex-1 overflow-auto bg-gray-200/60 p-4 sm:p-8 relative w-full"
+      id="workspace-scroll-area"
+    >
+      <!-- 드래그 앤 드롭 영역 겸 클릭 업로드 -->
+      <label
+        id="drop-zone"
+        for="pdf-upload"
+        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-gray-300 rounded-2xl bg-white/50 flex flex-col items-center justify-center transition-colors hover:bg-white/80 z-10 cursor-pointer text-center px-4"
+      >
+        <div
+          class="w-16 h-16 sm:w-20 sm:h-20 mb-4 rounded-full bg-red-50 flex items-center justify-center text-red-500 shadow-sm"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="32"
+            height="32"
+            sm:width="40"
+            sm:height="40"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"
+            />
+            <polyline points="14 2 14 8 20 8" />
+            <path d="M12 18v-6" />
+            <path d="m9 15 3-3 3 3" />
+          </svg>
+        </div>
+        <h2 class="text-lg sm:text-xl font-bold text-gray-700 mb-2">
+          클릭하여 PDF 선택 혹은 여기에 드롭하세요
+        </h2>
+        <p class="text-gray-500 text-xs sm:text-sm mb-6">
+          여러 개의 파일도 한 번에 불러올 수 있습니다
+        </p>
+      </label>
+
+      <!-- 페이지 렌더링 영역 -->
+      <div
+        id="pages-wrapper"
+        class="flex flex-col items-center pb-20 w-full min-h-full gap-8 hidden relative z-20"
+      >
+        <!-- JS로 동적 렌더링 -->
+      </div>
+    </main>
+
+    <!-- Loading Overlay -->
+    <div
+      id="loading-overlay"
+      class="fixed inset-0 z-[999999] bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center hidden"
+    >
+      <svg
+        class="animate-spin text-blue-600 mb-4"
+        xmlns="http://www.w3.org/2000/svg"
+        width="48"
+        height="48"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+      </svg>
+      <h3 id="loading-title" class="text-lg font-bold text-gray-800">
+        작업 처리 중...
+      </h3>
+      <p id="loading-text" class="text-gray-500 mt-2 text-sm text-center px-4">
+        잠시만 기다려주세요
+      </p>
+    </div>
+
+    <!-- 전체 복사 확인 모달 -->
+    <div
+      id="copy-warning-modal"
+      class="fixed inset-0 z-[999999] bg-black/50 backdrop-blur-sm hidden flex items-center justify-center"
+    >
+      <div
+        class="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4 pointer-events-auto"
+      >
+        <div class="flex items-center gap-3 mb-4">
+          <div
+            class="w-10 h-10 rounded-full bg-amber-100 text-amber-500 flex items-center justify-center shrink-0"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+              />
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold text-gray-900">전체 복사 안내</h3>
+        </div>
+        <p class="text-gray-600 text-sm mb-3 leading-relaxed">
+          여유 있게 <b>최대 5장(2열의 경우 10장)</b>까지만 사용을 권장합니다.<br />
+          <span class="text-gray-400 text-xs"
+            >메모리 초과 시 복사가 실패할 수 있습니다.</span
+          >
+        </p>
+
+        <!-- 배열 옵션 선택 -->
+        <div class="mb-5 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <p class="text-xs font-bold text-gray-700 mb-2">이미지 배열 방식</p>
+          <div class="flex gap-4">
+            <label
+              class="flex items-center gap-1.5 text-sm cursor-pointer hover:text-blue-700"
+            >
+              <input
+                type="radio"
+                name="copy-layout"
+                value="1"
+                checked
+                class="accent-blue-600 w-4 h-4"
+              />
+              1열 (세로)
+            </label>
+            <label
+              class="flex items-center gap-1.5 text-sm cursor-pointer hover:text-blue-700"
+            >
+              <input
+                type="radio"
+                name="copy-layout"
+                value="2"
+                class="accent-blue-600 w-4 h-4"
+              />
+              2열 (나란히)
+            </label>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2">
+          <button
+            onclick="closeCopyWarningModal()"
+            class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+          >
+            취소
+          </button>
+          <button
+            onclick="executeCopyAll()"
+            class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+          >
+            복사 진행
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- App Logic -->
+    <script>
+      // PDF.js 워커 설정 (필수)
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+      let state = {
+        pdfFileName: "",
+        pages: [], // { globalPageNum, originalFile, originalPage, totalPages, canvas }
+        isProcessing: false,
+      };
+
+      const DOM = {
+        dropZone: document.getElementById("drop-zone"),
+        pagesWrapper: document.getElementById("pages-wrapper"),
+        loadingOverlay: document.getElementById("loading-overlay"),
+        loadingTitle: document.getElementById("loading-title"),
+        loadingText: document.getElementById("loading-text"),
+        btnClear: document.getElementById("btn-clear"),
+        btnExportZip: document.getElementById("btn-export-zip"),
+        btnCopyAll: document.getElementById("btn-copy-all"),
+        copyWarningModal: document.getElementById("copy-warning-modal"),
+      };
+
+      // 앱 실행 시 저장된 데이터 불러오기
+      window.addEventListener("DOMContentLoaded", () => {
+        loadState();
+      });
+
+      // --- IndexedDB (localForage) Storage Logic ---
+      async function saveState() {
+        try {
+          // 캔버스를 이미지 형태(Blob)로 변환하여 저장 준비
+          const pagesToSave = await Promise.all(
+            state.pages.map(async (page) => {
+              const blob = await new Promise((resolve) =>
+                page.canvas.toBlob(resolve, "image/png"),
+              );
+              return {
+                globalPageNum: page.globalPageNum,
+                originalFile: page.originalFile,
+                originalPage: page.originalPage,
+                totalPages: page.totalPages,
+                blob: blob, // Blob 자체를 DB에 저장 (효율적)
+              };
+            }),
+          );
+
+          await localforage.setItem("pdf_app_state", {
+            pdfFileName: state.pdfFileName,
+            pages: pagesToSave,
+          });
+        } catch (err) {
+          console.error("상태 저장 실패:", err);
+        }
+      }
+
+      async function loadState() {
+        try {
+          const savedData = await localforage.getItem("pdf_app_state");
+          if (savedData && savedData.pages && savedData.pages.length > 0) {
+            showLoading(
+              "이전 작업 복원 중...",
+              "저장된 데이터를 불러오고 있습니다.",
+            );
+            state.pdfFileName = savedData.pdfFileName;
+
+            for (const savedPage of savedData.pages) {
+              const img = new Image();
+              const objectUrl = URL.createObjectURL(savedPage.blob);
+              img.src = objectUrl;
+
+              await new Promise((resolve) => {
+                img.onload = () => {
+                  const canvas = document.createElement("canvas");
+                  canvas.width = img.width;
+                  canvas.height = img.height;
+                  const ctx = canvas.getContext("2d");
+                  ctx.drawImage(img, 0, 0);
+
+                  state.pages.push({
+                    globalPageNum: savedPage.globalPageNum,
+                    originalFile: savedPage.originalFile,
+                    originalPage: savedPage.originalPage,
+                    totalPages: savedPage.totalPages,
+                    canvas: canvas,
+                  });
+
+                  renderPageBlock(
+                    savedPage.globalPageNum,
+                    canvas,
+                    savedPage.originalFile,
+                    savedPage.originalPage,
+                    savedPage.totalPages,
+                  );
+                  URL.revokeObjectURL(objectUrl); // 메모리 누수 방지
+                  resolve();
+                };
+              });
+            }
+          }
+        } catch (err) {
+          console.error("상태 불러오기 실패:", err);
+        } finally {
+          hideLoading();
+          updateUI();
+        }
+      }
+
+      // --- 드래그 앤 드롭 및 파일 업로드 로직 ---
+      ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+        DOM.dropZone.addEventListener(eventName, preventDefaults, false);
+        document.body.addEventListener(eventName, preventDefaults, false);
+      });
+
+      function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      ["dragenter", "dragover"].forEach((eventName) => {
+        DOM.dropZone.addEventListener(eventName, () => {
+          DOM.dropZone.classList.add("bg-blue-50", "border-blue-400");
+        });
+      });
+
+      ["dragleave", "drop"].forEach((eventName) => {
+        DOM.dropZone.addEventListener(eventName, () => {
+          DOM.dropZone.classList.remove("bg-blue-50", "border-blue-400");
+        });
+      });
+
+      DOM.dropZone.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        const files = Array.from(dt.files).filter(
+          (file) => file.type === "application/pdf",
+        );
+
+        if (files.length > 0) {
+          processPDFFiles(files);
+        } else {
+          alert("PDF 파일만 업로드 가능합니다.");
+        }
+      });
+
+      function handleFileUpload(event) {
+        const files = Array.from(event.target.files).filter(
+          (file) => file.type === "application/pdf",
+        );
+        if (files.length > 0) {
+          processPDFFiles(files);
+        }
+        event.target.value = ""; // 동일 파일 재선택을 위해 초기화
+      }
+
+      function showLoading(title, text) {
+        DOM.loadingTitle.innerText = title;
+        DOM.loadingText.innerText = text;
+        DOM.loadingOverlay.classList.remove("hidden");
+      }
+
+      function hideLoading() {
+        DOM.loadingOverlay.classList.add("hidden");
+      }
+
+      async function processPDFFiles(files) {
+        await clearAll(true); // 기존 내용 지우기
+        state.isProcessing = true;
+
+        state.pdfFileName =
+          files.length === 1
+            ? files[0].name.replace(/\.[^/.]+$/, "")
+            : "Merged_PDFs";
+        updateUI();
+
+        showLoading("PDF 변환 중...", "잠시만 기다려주세요 (0 / 0)");
+
+        try {
+          let globalPageNum = 1;
+
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const arrayBuffer = await file.arrayBuffer();
+            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+            const pdf = await loadingTask.promise;
+            const totalPages = pdf.numPages;
+
+            for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+              DOM.loadingText.innerText =
+                files.length > 1
+                  ? `${file.name} 변환 중... (${i + 1}/${files.length} 문서)`
+                  : `페이지 변환 중 (${pageNum} / ${totalPages})`;
+
+              const page = await pdf.getPage(pageNum);
+              const viewport = page.getViewport({ scale: 2.0 });
+              const canvas = document.createElement("canvas");
+              const context = canvas.getContext("2d");
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+
+              const renderContext = {
+                canvasContext: context,
+                viewport: viewport,
+              };
+              await page.render(renderContext).promise;
+
+              state.pages.push({
+                globalPageNum: globalPageNum,
+                originalFile: file.name,
+                originalPage: pageNum,
+                totalPages: totalPages,
+                canvas: canvas,
+              });
+
+              renderPageBlock(
+                globalPageNum,
+                canvas,
+                file.name,
+                pageNum,
+                totalPages,
+              );
+              globalPageNum++;
+            }
+          }
+
+          // 변환이 모두 끝나면 브라우저에 자동 저장
+          showLoading(
+            "데이터 저장 중...",
+            "브라우저에 복구 데이터를 안전하게 저장하고 있습니다.",
+          );
+          await saveState();
+        } catch (error) {
+          console.error("PDF 처리 에러:", error);
+          alert(
+            "PDF 파일을 처리하는 중 오류가 발생했습니다. 파일이 손상되었거나 암호가 걸려있을 수 있습니다.",
+          );
+        } finally {
+          state.isProcessing = false;
+          hideLoading();
+          updateUI();
+        }
+      }
+
+      // 플로팅 버튼 적용 페이지 블록 생성
+      function renderPageBlock(
+        globalPageNum,
+        canvas,
+        fileName,
+        pageNum,
+        totalPages,
+      ) {
+        const block = document.createElement("div");
+        block.className =
+          "relative group flex flex-col w-full max-w-[800px] pdf-canvas-wrapper rounded-xl border border-gray-200 overflow-hidden";
+
+        // 고정 뱃지 정보
+        const floatingLabel = document.createElement("div");
+        floatingLabel.className =
+          "absolute top-3 left-3 bg-white/90 backdrop-blur-sm border border-gray-200 text-gray-700 px-2.5 py-1 rounded-md text-xs font-bold shadow-sm pointer-events-none z-30 transition-opacity";
+        floatingLabel.innerHTML = `#${globalPageNum} <span class="text-gray-400 ml-1 font-normal hidden sm:inline">${fileName} (${pageNum}/${totalPages})</span>`;
+
+        // 마우스 호버 시 나오는 우측 플로팅 액션
+        const floatingActions = document.createElement("div");
+        floatingActions.className =
+          "absolute top-3 right-3 flex items-center gap-1 bg-gray-900/85 backdrop-blur-md p-1.5 rounded-lg shadow-lg opacity-90 sm:opacity-0 group-hover:opacity-100 transition-all duration-200 z-30 sm:translate-y-[-4px] sm:group-hover:translate-y-0";
+        floatingActions.innerHTML = `
+          <button onclick="copyToClipboard(${globalPageNum})" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/20 rounded-md transition-colors" title="클립보드에 복사">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            복사
+          </button>
+          <div class="w-px h-4 bg-gray-600 mx-0.5"></div>
+          <button onclick="downloadSinglePage(${globalPageNum})" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-500 hover:bg-teal-400 rounded-md transition-colors shadow-sm" title="PNG 저장">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            저장
+          </button>
+        `;
+
+        block.appendChild(floatingLabel);
+        block.appendChild(floatingActions);
+        block.appendChild(canvas);
+        DOM.pagesWrapper.appendChild(block);
+      }
+
+      async function copyToClipboard(globalPageNum) {
+        const pageData = state.pages.find(
+          (p) => p.globalPageNum === globalPageNum,
+        );
+        if (!pageData) return;
+
+        try {
+          pageData.canvas.toBlob(async (blob) => {
+            if (!blob) throw new Error("캔버스 변환 실패");
+
+            try {
+              const item = new ClipboardItem({ "image/png": blob });
+              await navigator.clipboard.write([item]);
+              alert(
+                `[${pageData.originalFile}] ${pageData.originalPage}페이지가 클립보드에 복사되었습니다! (Ctrl+V로 붙여넣기)`,
+              );
+            } catch (err) {
+              console.error("클립보드 API 실패", err);
+              alert(
+                "현재 환경에서 클립보드 이미지 복사가 지원되지 않습니다. '저장' 버튼을 이용해 주세요.",
+              );
+            }
+          }, "image/png");
+        } catch (e) {
+          console.error(e);
+          alert("복사 중 오류가 발생했습니다.");
+        }
+      }
+
+      function copyAllToClipboard() {
+        if (state.pages.length === 0) return;
+        DOM.copyWarningModal.classList.remove("hidden");
+      }
+
+      function closeCopyWarningModal() {
+        DOM.copyWarningModal.classList.add("hidden");
+      }
+
+      async function executeCopyAll() {
+        // 라디오 버튼(1열/2열) 값 가져오기
+        const layoutMode = document.querySelector(
+          'input[name="copy-layout"]:checked',
+        ).value;
+        const columns = parseInt(layoutMode, 10);
+
+        closeCopyWarningModal();
+        showLoading(
+          "전체 이미지 병합 중...",
+          `${columns}열 방식으로 페이지를 이어붙이고 있습니다.\n수 초가 소요될 수 있습니다.`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        try {
+          let totalHeight = 0;
+          let totalWidth = 0;
+          let maxWidth = 0;
+
+          // 가장 큰 캔버스 너비 찾기
+          for (const page of state.pages) {
+            if (page.canvas.width > maxWidth) {
+              maxWidth = page.canvas.width;
+            }
+          }
+
+          // 1열 방식 계산
+          if (columns === 1) {
+            totalWidth = maxWidth;
+            for (const page of state.pages) {
+              totalHeight += page.canvas.height;
+            }
+          }
+          // 2열 방식 계산
+          else {
+            totalWidth = maxWidth * 2;
+            for (let i = 0; i < state.pages.length; i += 2) {
+              const h1 = state.pages[i].canvas.height;
+              const h2 =
+                i + 1 < state.pages.length
+                  ? state.pages[i + 1].canvas.height
+                  : 0;
+              totalHeight += Math.max(h1, h2); // 두 열 중 더 긴 높이를 줄 높이로 산정
+            }
+          }
+
+          const mergedCanvas = document.createElement("canvas");
+          mergedCanvas.width = totalWidth;
+          mergedCanvas.height = totalHeight;
+          const ctx = mergedCanvas.getContext("2d");
+
+          // 하얀색 배경 채우기
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+          let currentY = 0;
+
+          // 1열 렌더링
+          if (columns === 1) {
+            for (const page of state.pages) {
+              const xOffset = (maxWidth - page.canvas.width) / 2;
+              ctx.drawImage(page.canvas, xOffset, currentY);
+              currentY += page.canvas.height;
+            }
+          }
+          // 2열 렌더링
+          else {
+            for (let i = 0; i < state.pages.length; i += 2) {
+              const p1 = state.pages[i];
+              const p2 = i + 1 < state.pages.length ? state.pages[i + 1] : null;
+
+              const h1 = p1.canvas.height;
+              const h2 = p2 ? p2.canvas.height : 0;
+              const rowHeight = Math.max(h1, h2);
+
+              // 1열 쪽에 첫 번째 이미지 그리기 (중앙 정렬)
+              const xOffset1 = (maxWidth - p1.canvas.width) / 2;
+              ctx.drawImage(p1.canvas, xOffset1, currentY);
+
+              // 2열 쪽에 두 번째 이미지 그리기 (중앙 정렬)
+              if (p2) {
+                const xOffset2 = maxWidth + (maxWidth - p2.canvas.width) / 2;
+                ctx.drawImage(p2.canvas, xOffset2, currentY);
+              }
+
+              currentY += rowHeight;
+            }
+          }
+
+          mergedCanvas.toBlob(async (blob) => {
+            if (!blob)
+              throw new Error("캔버스 변환 실패. 크기가 너무 클 수 있습니다.");
+
+            try {
+              const item = new ClipboardItem({ "image/png": blob });
+              await navigator.clipboard.write([item]);
+              alert(
+                `총 ${state.pages.length}장의 페이지가 ${columns}열 이미지로 복사되었습니다!\n(Ctrl+V로 붙여넣기)`,
+              );
+            } catch (err) {
+              console.error("클립보드 API 실패", err);
+              alert(
+                "이미지 용량이 너무 크거나 현재 환경에서 클립보드 복사를 지원하지 않습니다. ZIP 저장을 이용해 주세요.",
+              );
+            } finally {
+              hideLoading();
+            }
+          }, "image/png");
+        } catch (error) {
+          console.error(error);
+          alert(
+            "이미지 병합 중 오류가 발생했습니다. 브라우저 메모리 한계를 초과했을 수 있습니다.",
+          );
+          hideLoading();
+        }
+      }
+
+      function downloadSinglePage(globalPageNum) {
+        const pageData = state.pages.find(
+          (p) => p.globalPageNum === globalPageNum,
+        );
+        if (!pageData) return;
+
+        const safeFileName = pageData.originalFile.replace(/\.[^/.]+$/, "");
+        const link = document.createElement("a");
+        link.href = pageData.canvas.toDataURL("image/png");
+        link.download = `${safeFileName}_page_${pageData.originalPage}.png`;
+        link.click();
+      }
+
+      async function exportAllToZip() {
+        if (state.pages.length === 0) return;
+
+        showLoading(
+          "ZIP 파일 생성 중...",
+          "각 페이지를 이미지로 압축하고 있습니다.",
+        );
+
+        try {
+          const zip = new JSZip();
+          const folderName = `${state.pdfFileName}_images`;
+          const folder = zip.folder(folderName);
+
+          for (let i = 0; i < state.pages.length; i++) {
+            const pageData = state.pages[i];
+            const dataUrl = pageData.canvas.toDataURL("image/png");
+            const base64Data = dataUrl.split(",")[1];
+
+            const paddedNum = String(pageData.globalPageNum).padStart(3, "0");
+            const safeFileName = pageData.originalFile.replace(/\.[^/.]+$/, "");
+
+            folder.file(
+              `${paddedNum}_${safeFileName}_p${pageData.originalPage}.png`,
+              base64Data,
+              { base64: true },
+            );
+          }
+
+          const content = await zip.generateAsync({ type: "blob" });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(content);
+          link.download = `${folderName}.zip`;
+          link.click();
+          URL.revokeObjectURL(link.href);
+        } catch (error) {
+          console.error(error);
+          alert("압축 파일 생성 중 오류가 발생했습니다.");
+        } finally {
+          hideLoading();
+        }
+      }
+
+      async function clearAll(skipConfirm = false) {
+        if (!skipConfirm && state.pages.length > 0) {
+          if (!confirm("모든 페이지를 지우고 초기화하시겠습니까?")) return;
+        }
+
+        state.pdfFileName = "";
+        state.pages = [];
+        DOM.pagesWrapper.innerHTML = "";
+        updateUI();
+
+        // 초기화 시 브라우저 저장소 데이터도 삭제 반영
+        if (!skipConfirm) {
+          await saveState();
+        }
+      }
+
+      function updateUI() {
+        const hasPages = state.pages.length > 0;
+
+        if (hasPages) {
+          DOM.dropZone.classList.add("hidden");
+          DOM.pagesWrapper.classList.remove("hidden");
+          DOM.btnClear.disabled = false;
+          DOM.btnExportZip.disabled = false;
+          DOM.btnCopyAll.disabled = false;
+        } else {
+          DOM.dropZone.classList.remove("hidden");
+          DOM.pagesWrapper.classList.add("hidden");
+          DOM.btnClear.disabled = true;
+          DOM.btnExportZip.disabled = true;
+          DOM.btnCopyAll.disabled = true;
+        }
+      }
+    </script>
+  </body>
+</html>
